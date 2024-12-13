@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using Mirror;
 
+
 public class PlayerMovementController : NetworkBehaviour, IDamageable
 {
     [Header("Player Stats")]
@@ -10,12 +11,18 @@ public class PlayerMovementController : NetworkBehaviour, IDamageable
     [SyncVar] public int healthMax = 100;
     [SyncVar] public int kills;
     [SyncVar] public int deaths;
-    [SyncVar] public bool isDeath;
+    [SyncVar] private bool isDead = false;
 
     [Header("Movement Settings")]
-    [SerializeField] float PlayerSpeed;
-    [SerializeField] float PlayerSpeedMax;
-    // [SerializeField] private float jumpHeight = 2f;
+    public float playerSpeed = 5f;
+    public float jumpHeight = 2f;
+    public float groundDistance = 0.4f;
+    public float gravity = -9.81f;
+    public Transform groundCheck;
+    public LayerMask groundMask;
+
+    private Rigidbody rb;
+    private bool isGrounded;
 
     [Header("Look Settings")]
     [SerializeField] float sensitivityX = 1f;
@@ -38,17 +45,20 @@ public class PlayerMovementController : NetworkBehaviour, IDamageable
     [Header("GFX")]
     [SerializeField] GameObject[] disableOnClient;
     [SerializeField] GameObject[] disableOnDeath;
-    Rigidbody rb;
+    [Header("VFX")]
+    AudioSource audioSource;
+    [SerializeField] protected AudioClip shootClip;
     void Start()
     {
         rb = GetComponent<Rigidbody>();
+        audioSource = GetComponent<AudioSource>();
         if (isLocalPlayer)
         {
             //It is local player.
 
             //Setup FPS camera.
             Camera.main.transform.SetParent(transform);
-            Camera.main.transform.localPosition = new Vector3(0, 0.7f, 0);
+            Camera.main.transform.localPosition = new Vector3(0, 0.7f, 0.5f);
             Camera.main.transform.rotation = Quaternion.identity;
 
             CanvasManager.instance.ChangePlayerState(true);
@@ -59,7 +69,7 @@ public class PlayerMovementController : NetworkBehaviour, IDamageable
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
 
-            foreach (GameObject go in disableOnClient)
+            foreach (var go in disableOnClient)
             {
                 go.SetActive(false);
             }
@@ -76,20 +86,35 @@ public class PlayerMovementController : NetworkBehaviour, IDamageable
             return;
         Move();
         Fire();
+
     }
 
 
     private void Move()
     {
         //Movement
-        if (Input.GetAxis("Horizontal") != Mathf.Epsilon || Input.GetAxis("Vertical") != Mathf.Epsilon)
-        {
-            Vector3 movementDirection = new Vector3(Input.GetAxis("Horizontal"), 0, Input.GetAxis("Vertical"));
-            movementDirection *= PlayerSpeed;
-            movementDirection = Vector3.ClampMagnitude(movementDirection, PlayerSpeed);
+        // Ground check
+        isGrounded = Physics.CheckSphere(groundCheck.position, groundDistance, groundMask);
 
-            if (rb.velocity.magnitude < PlayerSpeedMax)
-                rb.AddRelativeForce(movementDirection * Time.deltaTime * 100);
+        // Horizontal movement
+        float moveX = Input.GetAxis("Horizontal");
+        float moveZ = Input.GetAxis("Vertical");
+
+        Vector3 move = transform.right * moveX + transform.forward * moveZ;
+        Vector3 moveVelocity = move * playerSpeed;
+
+        rb.velocity = new Vector3(moveVelocity.x, rb.velocity.y, moveVelocity.z);
+
+        // Jumping
+        if (Input.GetKeyDown(KeyCode.Space) && isGrounded)
+        {
+            rb.velocity = new Vector3(rb.velocity.x, Mathf.Sqrt(jumpHeight * -2f * gravity), rb.velocity.z);
+        }
+
+        // Apply gravity manually (if needed, usually handled by Rigidbody)
+        if (!isGrounded)
+        {
+            rb.AddForce(Vector3.up * gravity * Time.deltaTime, ForceMode.Acceleration);
         }
         //Rotation
         float mouseX = Input.GetAxis("Mouse X") * sensitivityX * Time.deltaTime;
@@ -105,10 +130,11 @@ public class PlayerMovementController : NetworkBehaviour, IDamageable
         if (Input.GetMouseButtonDown(0))
         {
             // Nếu còn đạn và nhân vật chưa chết
-            if (ammoCount > 0 && !isDeath)
+            if (ammoCount > 0 && !isDead)
             {
                 // Thực hiện lệnh bắn
                 CmdRaycastAttack(Camera.main.transform.forward, Camera.main.transform.position);
+                audioSource.PlayOneShot(shootClip);
             }
         }
     }
@@ -119,10 +145,11 @@ public class PlayerMovementController : NetworkBehaviour, IDamageable
     [Command]
     private void CmdRaycastAttack(Vector3 clientCam, Vector3 clientCamPos)
     {
-        if (ammoCount > 0 && !isDeath)
+
+        if (!isDead)
         {
-            ammoCount--;
-            TargetShoot();
+            // ammoCount--;
+            // TargetShoot();
 
             Ray ray = new Ray(clientCamPos, clientCam * 500);
             Debug.DrawRay(clientCamPos, clientCam * 500, Color.red, 2f);
@@ -134,6 +161,7 @@ public class PlayerMovementController : NetworkBehaviour, IDamageable
                 {
                     RpcPlayerFiredEntity(GetComponent<NetworkIdentity>().netId, hit.collider.GetComponent<NetworkIdentity>().netId, hit.point, hit.normal);
                     hit.collider.GetComponent<PlayerMovementController>().Damage(weaponDamage, GetComponent<NetworkIdentity>().netId);
+
                 }
                 else
                 {
@@ -162,7 +190,6 @@ public class PlayerMovementController : NetworkBehaviour, IDamageable
     [TargetRpc]
     void TargetShoot()
     {
-        //Shoot success and change UI
         CanvasManager.instance.AmmoCountText.text = ammoCount.ToString() + "/" + ammoCountMax.ToString();
     }
 
@@ -170,71 +197,34 @@ public class PlayerMovementController : NetworkBehaviour, IDamageable
     {
         weaponMuzzle.GetComponent<ParticleSystem>().Play();
     }
-    [Server]
+    [Server]    
     public void Damage(int amount, uint shooterID)
     {
         health -= amount;
-        TargetGotDame();
+        RpcTakeDame(health);
         if (health < 1)
         {
             Die();
             NetworkClient.spawned[shooterID].GetComponent<PlayerMovementController>().kills++;
-            NetworkClient.spawned[shooterID].GetComponent<PlayerMovementController>().TargetGotKill();
-
         }
     }
-    [Server]
     public void Die()
     {
+
         deaths++;
-        isDeath = true;
-        Debug.Log("Player Die");
-        TargetDie();
+        isDead = true;
+        Debug.Log("Player Dieeeeeeeeeeeeeeeeeeeeee");
         RpcPlayerDie();
+        HoiSinh();
     }
-    [Command]
-    public void CmdRespawn()
+    [ClientRpc]
+    void RpcTakeDame(int newHealth)
     {
-        if (isDeath)
+        if (isOwned)
         {
-            health = healthMax;
-            ammoCount = ammoCountMax;
-            isDeath = false;
-            TargetRespawn();
-            RpcPlayerRespawn();
+            CanvasManager.instance.UpdateHP(newHealth, healthMax);
+            Debug.Log("We got hit");
         }
-
-    }
-    [TargetRpc]
-    void TargetRespawn()
-    {
-        CanvasManager.instance.ChangePlayerState(true);
-        CanvasManager.instance.UpdateHP(health, healthMax);
-        Cursor.lockState = CursorLockMode.Locked;
-        transform.position = NetworkManager.singleton.GetStartPosition().position;
-
-    }
-    [TargetRpc]
-    void TargetDie()
-    {
-        CanvasManager.instance.ChangePlayerState(!isDeath);
-        Cursor.lockState = CursorLockMode.None;
-        Debug.Log("You died");
-
-
-    }
-
-    [TargetRpc]
-    void TargetGotKill()
-    {
-        Debug.Log("You got kill");
-    }
-
-    [TargetRpc]
-    void TargetGotDame()
-    {
-        CanvasManager.instance.UpdateHP(health, healthMax);
-        Debug.Log("We got hit");
     }
     [ClientRpc]
     void RpcPlayerDie()
@@ -245,17 +235,28 @@ public class PlayerMovementController : NetworkBehaviour, IDamageable
             item.SetActive(false);
         }
     }
-
-    [ClientRpc]
-    void RpcPlayerRespawn()
+    public bool IsDead()
     {
+        return isDead;
+    }
+
+    public IEnumerator ReSpawn()
+    {
+        yield return new WaitForSeconds(5);
+        isDead = false;
+        health = healthMax;
+        CanvasManager.instance.UpdateHP(health, healthMax);
+        transform.position = NetworkManager.singleton.GetStartPosition().position;
         GetComponent<Collider>().enabled = true;
-        foreach (GameObject item in disableOnDeath)
+        foreach (var item in disableOnDeath)
         {
             item.SetActive(true);
         }
     }
+    [ClientRpc]
+    public void HoiSinh()
+    {
+        StartCoroutine(ReSpawn());
+    }
+
 }
-
-
-

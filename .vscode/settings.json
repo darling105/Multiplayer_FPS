@@ -52,5 +52,5 @@
         "temp/": true,
         "Temp/": true
     },
-    "dotnet.defaultSolution": "MultiplayerFPS.sln"
+    "dotnet.defaultSolution": "Multiplayer_FPS_RaceAndShoot.sln"
 }

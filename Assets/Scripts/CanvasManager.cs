@@ -59,11 +59,11 @@ public class CanvasManager : MonoBehaviour
         HPBar.localScale = new Vector3(currentHPPercent, 1, 1);
         HPText.text = currentHP.ToString() + "/" + maxHP.ToString();
     }
-    public void RespawnButton()
-    {
-        if (localPlayer != null)
-        {
-            localPlayer.CmdRespawn();
-        }
-    }
+    // public void RespawnButton()
+    // {
+    //     if (localPlayer != null)
+    //     {
+    //         localPlayer.CmdRespawn();
+    //     }
+    // }
 }
